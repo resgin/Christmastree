@@ -51,6 +51,9 @@
             color: #fff; text-shadow: 0 0 10px rgba(0,0,0,0.8);
             transition: opacity 0.5s;
         }
+        #ui-layer button {
+            pointer-events: auto !important;
+        }
  
         h1 {
             font-weight: 200; letter-spacing: 4px; text-transform: uppercase; font-size: 2.2rem; margin: 0 0 15px 0;
@@ -67,12 +70,30 @@
         #status-text { margin-bottom: 10px; font-size: 1rem; color: #fff; font-weight: bold; }
  
         #upload-btn, #start-camera-btn {
-            pointer-events: auto; background: linear-gradient(45deg, #444, #666); border: 1px solid #888;
-            color: #fff; padding: 10px 24px; cursor: pointer; text-transform: uppercase;
-            font-size: 0.8rem; margin-top: 25px; transition: 0.3s; 
-            letter-spacing: 1px; border-radius: 20px;
+            pointer-events: auto !important; 
+            background: linear-gradient(45deg, #444, #666); 
+            border: 1px solid #888;
+            color: #fff; 
+            padding: 10px 24px; 
+            cursor: pointer; 
+            text-transform: uppercase;
+            font-size: 0.8rem; 
+            margin-top: 25px; 
+            margin-bottom: 10px;
+            margin-right: 10px;
+            display: inline-block !important;
+            transition: 0.3s; 
+            letter-spacing: 1px; 
+            border-radius: 20px;
+            visibility: visible !important;
+            opacity: 1 !important;
+            z-index: 100;
         }
-        #upload-btn:hover { background: #fff; color: #000; box-shadow: 0 0 20px rgba(255,255,255,0.5); }
+        #upload-btn:hover, #start-camera-btn:hover { 
+            background: #fff; 
+            color: #000; 
+            box-shadow: 0 0 20px rgba(255,255,255,0.5); 
+        }
         #file-input { display: none; }
          
         #loading {
@@ -102,6 +123,34 @@
         }
         .hide-ui #fullscreen-btn:hover {
             opacity: 1;
+        }
+        
+        /* 响应式设计 - 移动端优化 */
+        @media (max-width: 768px) {
+            #ui-layer {
+                top: 10px;
+                left: 10px;
+                right: 10px;
+            }
+            
+            #upload-btn, #start-camera-btn {
+                display: block !important;
+                width: 100%;
+                max-width: 200px;
+                margin: 10px 0;
+                padding: 12px 20px;
+                font-size: 0.9rem;
+            }
+            
+            .instructions {
+                font-size: 0.85rem;
+                max-width: 100%;
+                padding: 12px;
+            }
+            
+            h1 {
+                font-size: 1.5rem;
+            }
         }
     </style>
     <!-- Import Map -->
