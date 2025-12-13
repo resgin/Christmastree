@@ -596,13 +596,21 @@
         
         async function setupMediaPipe() {
             try {
+                console.log('开始初始化 MediaPipe...');
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+                console.log('FilesetResolver 初始化完成');
+                
                 handLandmarker = await HandLandmarker.createFromOptions(vision, {
                     baseOptions: {
                         modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
                         delegate: "GPU"
                     },
                     runningMode: "VIDEO", numHands: 1
+                });
+                
+                console.log('HandLandmarker 初始化成功', {
+                    handLandmarker: !!handLandmarker,
+                    runningMode: handLandmarker?.runningMode
                 });
                 
                 document.getElementById('loading').style.display = 'none';
@@ -654,9 +662,23 @@
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
                          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
             
+            // 输出调试信息
+            console.log('开始启动摄像头...', {
+                protocol: location.protocol,
+                hostname: location.hostname,
+                userAgent: navigator.userAgent,
+                mediaDevicesSupported: !!navigator.mediaDevices,
+                getUserMediaSupported: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+                isIOS: isIOS
+            });
+            
             // 如果已经在运行，先停止
             if (cameraStream) {
-                cameraStream.getTracks().forEach(track => track.stop());
+                console.log('停止之前的摄像头流');
+                cameraStream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log('已停止轨道:', track.kind, track.label);
+                });
                 cameraStream = null;
             }
             
@@ -761,13 +783,69 @@
                     
                     // 等待视频元数据加载
                     const handleVideoReady = () => {
-                        console.log('视频就绪');
+                        console.log('视频就绪', {
+                            videoWidth: video.videoWidth,
+                            videoHeight: video.videoHeight,
+                            readyState: video.readyState,
+                            handLandmarker: !!handLandmarker
+                        });
+                        
+                        // 检查视频尺寸
+                        if (video.videoWidth === 0 || video.videoHeight === 0) {
+                            console.warn('视频尺寸为0，等待视频加载...');
+                            setTimeout(handleVideoReady, 100);
+                            return;
+                        }
+                        
+                        // 检查 handLandmarker 是否已初始化
+                        if (!handLandmarker) {
+                            console.warn('handLandmarker 未初始化，等待初始化...');
+                            // 等待 handLandmarker 初始化，最多等待5秒
+                            let waitCount = 0;
+                            const checkHandLandmarker = setInterval(() => {
+                                waitCount++;
+                                if (handLandmarker) {
+                                    clearInterval(checkHandLandmarker);
+                                    console.log('handLandmarker 已初始化，启动手势识别');
+                                    startHandTracking();
+                                } else if (waitCount > 50) { // 5秒后超时
+                                    clearInterval(checkHandLandmarker);
+                                    console.error('handLandmarker 初始化超时');
+                                    if (statusText) {
+                                        statusText.innerText = "手势识别初始化失败，请刷新页面重试";
+                                    }
+                                }
+                            }, 100);
+                            return;
+                        }
+                        
+                        startHandTracking();
+                    };
+                    
+                    // 启动手势识别
+                    const startHandTracking = () => {
+                        if (!handLandmarker) {
+                            console.error('无法启动手势识别：handLandmarker 为 null');
+                            return;
+                        }
+                        
+                        if (!video || video.readyState < 2) {
+                            console.warn('视频未就绪，readyState:', video?.readyState);
+                            return;
+                        }
+                        
+                        console.log('启动手势识别', {
+                            videoWidth: video.videoWidth,
+                            videoHeight: video.videoHeight,
+                            handLandmarkerReady: !!handLandmarker
+                        });
+                        
                         if (statusText) {
                             statusText.innerText = "系统就绪，请伸手";
                         }
-                        if (handLandmarker) {
-                            predictWebcam(handLandmarker, video);
-                        }
+                        
+                        // 启动手势识别循环
+                        predictWebcam(handLandmarker, video);
                     };
                     
                     // 清除之前的事件监听器
@@ -784,6 +862,15 @@
                     try {
                         await video.play();
                         console.log('视频播放成功');
+                        // 播放成功后，如果视频已就绪，立即启动手势识别
+                        if (video.readyState >= 2 && handLandmarker) {
+                            console.log('视频已就绪且handLandmarker已初始化，立即启动手势识别');
+                            setTimeout(() => {
+                                if (handLandmarker && video.readyState >= 2) {
+                                    predictWebcam(handLandmarker, video);
+                                }
+                            }, 100);
+                        }
                     } catch (playError) {
                         console.warn('视频播放失败:', playError);
                         // iOS可能需要用户交互才能播放
@@ -793,9 +880,19 @@
                             const playOnClick = async () => {
                                 try {
                                     await video.play();
-                                    statusText.innerText = "系统就绪，请伸手";
-                                    if (handLandmarker) {
+                                    console.log('点击后视频播放成功');
+                                    // 播放成功后启动手势识别
+                                    if (handLandmarker && video.readyState >= 2) {
+                                        console.log('启动手势识别');
                                         predictWebcam(handLandmarker, video);
+                                    } else {
+                                        console.warn('handLandmarker 或视频未就绪', {
+                                            handLandmarker: !!handLandmarker,
+                                            readyState: video.readyState
+                                        });
+                                    }
+                                    if (statusText) {
+                                        statusText.innerText = "系统就绪，请伸手";
                                     }
                                 } catch (e) {
                                     console.error('点击后播放仍然失败:', e);
@@ -809,9 +906,17 @@
                     return; // 成功启动，退出函数
                 } catch (error) {
                     lastError = error;
-                    console.error('尝试约束失败:', constraints, error);
+                    // 输出详细的错误信息
+                    console.error('尝试约束失败:', {
+                        constraints: constraints,
+                        error: error,
+                        errorName: error?.name,
+                        errorMessage: error?.message,
+                        errorStack: error?.stack,
+                        errorToString: error?.toString()
+                    });
                     // 如果是权限错误，直接返回，不要继续尝试
-                    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
                         break;
                     }
                     continue; // 尝试下一个约束
@@ -831,82 +936,148 @@
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
                          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
             
-            let errorMessage = "无法访问摄像头";
+            // 安全地获取错误信息
+            const errorName = error?.name || 'UnknownError';
+            const errorMessage = error?.message || '';
+            const errorCode = error?.code;
             
-            if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+            let userMessage = "无法访问摄像头";
+            
+            // 根据错误类型显示不同的提示
+            if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError' || errorCode === 1) {
                 if (isIOS) {
-                    errorMessage = "请在iPhone设置 > Safari > 相机中允许访问摄像头权限";
+                    userMessage = "请在iPhone设置 > Safari > 相机中允许访问摄像头权限";
                 } else {
-                    errorMessage = "请允许访问摄像头权限（在浏览器设置中允许）";
+                    userMessage = "请允许访问摄像头权限（点击地址栏的锁图标或摄像头图标允许）";
                 }
-            } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-                errorMessage = "未找到摄像头设备";
-            } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+            } else if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError' || errorCode === 0) {
+                userMessage = "未找到摄像头设备，请检查摄像头是否已连接";
+            } else if (errorName === 'NotReadableError' || errorName === 'TrackStartError' || errorCode === 2) {
                 if (isIOS) {
-                    errorMessage = "摄像头被其他应用占用，请关闭相机或其他应用后重试";
+                    userMessage = "摄像头被其他应用占用，请关闭相机或其他应用后重试";
                 } else {
-                    errorMessage = "摄像头被其他应用占用，请关闭其他应用后重试";
+                    userMessage = "摄像头被其他应用占用，请关闭其他应用（如Zoom、Teams等）后重试";
                 }
-            } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
-                errorMessage = "摄像头不支持所需设置";
-            } else if (error.name === 'NotSupportedError') {
+            } else if (errorName === 'OverconstrainedError' || errorName === 'ConstraintNotSatisfiedError' || errorCode === 3) {
+                userMessage = "摄像头不支持所需设置，请尝试使用其他浏览器";
+            } else if (errorName === 'NotSupportedError' || errorName === 'NotSupportedError') {
                 if (isIOS) {
-                    errorMessage = "iPhone需要HTTPS环境，请使用 https:// 访问（或使用localhost）";
+                    userMessage = "iPhone需要HTTPS环境，请使用 https:// 访问（或使用localhost）";
                 } else {
-                    errorMessage = "当前环境不支持摄像头（需要 HTTPS）";
+                    userMessage = "当前环境不支持摄像头（需要 HTTPS 或 localhost）";
                 }
-            } else if (error.name === 'TypeError' && error.message && error.message.includes('getUserMedia')) {
+            } else if (errorName === 'TypeError' && errorMessage && errorMessage.includes('getUserMedia')) {
                 if (isIOS) {
-                    errorMessage = "iOS Safari需要HTTPS环境，请使用 https:// 访问";
+                    userMessage = "iOS Safari需要HTTPS环境，请使用 https:// 访问";
                 } else {
-                    errorMessage = "浏览器不支持getUserMedia API";
+                    userMessage = "浏览器不支持getUserMedia API，请更新浏览器";
                 }
+            } else if (errorName === 'AbortError' || errorCode === 4) {
+                userMessage = "摄像头访问被中止，请重试";
+            } else if (errorName === 'SecurityError' || errorCode === 5) {
+                userMessage = "安全错误：请确保使用 HTTPS 或 localhost 访问";
             } else {
-                errorMessage = "摄像头错误: " + (error.message || error.name);
-                if (isIOS) {
-                    errorMessage += " (iPhone需要HTTPS)";
+                // 如果错误对象为空或信息不完整，提供通用提示
+                if (!error || (!errorName && !errorMessage)) {
+                    userMessage = "摄像头访问失败，可能的原因：\n1. 摄像头权限被拒绝\n2. 摄像头被其他应用占用\n3. 浏览器不支持\n请检查浏览器控制台获取详细信息";
+                } else {
+                    userMessage = "摄像头错误: " + (errorMessage || errorName || '未知错误');
                 }
             }
             
             if (statusText) {
-                statusText.innerText = errorMessage;
+                statusText.innerText = userMessage;
             }
             if (startBtn) {
                 startBtn.style.display = 'block';
             }
             
             // 在控制台输出详细错误信息以便调试
-            console.error('详细错误信息:', {
-                name: error.name,
-                message: error.message,
-                stack: error.stack,
+            const errorDetails = {
+                error: error,
+                errorName: errorName,
+                errorMessage: errorMessage,
+                errorCode: errorCode,
+                errorStack: error?.stack,
+                errorToString: error?.toString(),
                 isIOS: isIOS,
                 protocol: location.protocol,
-                hostname: location.hostname
-            });
+                hostname: location.hostname,
+                userAgent: navigator.userAgent,
+                mediaDevicesSupported: !!navigator.mediaDevices,
+                getUserMediaSupported: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+            };
+            
+            console.error('详细错误信息:', errorDetails);
+            console.error('完整错误对象:', JSON.stringify(errorDetails, null, 2));
+            
+            // 尝试获取更多信息
+            if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+                navigator.mediaDevices.enumerateDevices().then(devices => {
+                    console.log('可用的媒体设备:', devices);
+                }).catch(err => {
+                    console.error('枚举设备失败:', err);
+                });
+            }
         }
  
         let lastVideoTime = -1;
         async function predictWebcam(handLandmarker, video) {
-            if (video.currentTime !== lastVideoTime) {
-                lastVideoTime = video.currentTime;
-                const result = handLandmarker.detectForVideo(video, performance.now());
-                 
-                const canvas = document.getElementById('skeleton-canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
- 
-                if (result.landmarks && result.landmarks.length > 0) {
-                    const landmarks = result.landmarks[0];
-                    isHandPresent = true;
-                    drawSkeleton(ctx, landmarks, canvas.width, canvas.height);
-                    handleGesture(landmarks);
-                } else {
-                    isHandPresent = false;
-                }
+            // 检查参数有效性
+            if (!handLandmarker) {
+                console.error('predictWebcam: handLandmarker 为 null');
+                return;
             }
+            
+            if (!video) {
+                console.error('predictWebcam: video 为 null');
+                return;
+            }
+            
+            // 检查视频是否就绪
+            if (video.readyState < 2) {
+                console.warn('视频未就绪，readyState:', video.readyState);
+                requestAnimationFrame(() => predictWebcam(handLandmarker, video));
+                return;
+            }
+            
+            // 检查视频尺寸
+            if (video.videoWidth === 0 || video.videoHeight === 0) {
+                console.warn('视频尺寸为0，等待...');
+                requestAnimationFrame(() => predictWebcam(handLandmarker, video));
+                return;
+            }
+            
+            try {
+                if (video.currentTime !== lastVideoTime) {
+                    lastVideoTime = video.currentTime;
+                    const result = handLandmarker.detectForVideo(video, performance.now());
+                     
+                    const canvas = document.getElementById('skeleton-canvas');
+                    if (!canvas) {
+                        console.error('skeleton-canvas 元素不存在');
+                        return;
+                    }
+                    
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    if (result.landmarks && result.landmarks.length > 0) {
+                        const landmarks = result.landmarks[0];
+                        isHandPresent = true;
+                        drawSkeleton(ctx, landmarks, canvas.width, canvas.height);
+                        handleGesture(landmarks);
+                    } else {
+                        isHandPresent = false;
+                    }
+                }
+            } catch (error) {
+                console.error('predictWebcam 错误:', error);
+                // 即使出错也继续循环，避免完全停止
+            }
+            
             requestAnimationFrame(() => predictWebcam(handLandmarker, video));
         }
          
