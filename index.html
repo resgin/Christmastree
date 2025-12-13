@@ -66,7 +66,7 @@
         .highlight { color: #d4af37; font-weight: bold; }
         #status-text { margin-bottom: 10px; font-size: 1rem; color: #fff; font-weight: bold; }
  
-        #upload-btn {
+        #upload-btn, #start-camera-btn {
             pointer-events: auto; background: linear-gradient(45deg, #444, #666); border: 1px solid #888;
             color: #fff; padding: 10px 24px; cursor: pointer; text-transform: uppercase;
             font-size: 0.8rem; margin-top: 25px; transition: 0.3s; 
@@ -92,7 +92,7 @@
  
         /* 隐藏 UI 的类 */
         .hide-ui #ui-layer, 
-        .hide-ui #upload-btn {
+        .hide-ui #upload-btn, .hide-ui #start-camera-btn {
             opacity: 0;
             pointer-events: none;
         }
@@ -128,7 +128,7 @@
         <div id="canvas-container"></div>
          
         <div id="video-container">
-            <video id="input-video" autoplay playsinline muted></video>
+            <video id="input-video" autoplay playsinline muted webkit-playsinline x5-playsinline></video>
             <canvas id="skeleton-canvas"></canvas>
         </div>
  
@@ -144,6 +144,7 @@
                 • <span class="highlight">捏合手指</span> : 抓取照片(需上传)
             </div>
             <button id="upload-btn" onclick="document.getElementById('file-input').click()">上传照片</button>
+            <button id="start-camera-btn" onclick="startCamera()" style="display: none;">启动摄像头</button>
             <input type="file" id="file-input" multiple accept="image/*">
         </div>
         <div id="loading">CRAFTING JEWELS...</div>
@@ -539,74 +540,204 @@
         }
  
         // --- Interaction ---
+        let handLandmarker = null;
+        let cameraStream = null;
+        
         async function setupMediaPipe() {
-            const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
-            const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
-                    delegate: "GPU"
-                },
-                runningMode: "VIDEO", numHands: 1
-            });
+            try {
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+                handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO", numHands: 1
+                });
+                
+                document.getElementById('loading').style.display = 'none';
+                
+                // 检测是否为移动设备
+                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                                 (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+                
+                // 检查 HTTPS（移动端需要，PC端 localhost 可以）
+                const needsHTTPS = isMobile && location.protocol !== 'https:' && 
+                                   location.hostname !== 'localhost' && location.hostname !== '127.0.0.1';
+                
+                if (needsHTTPS) {
+                    document.getElementById('status-text').innerText = "请在 HTTPS 环境下使用（移动端需要 HTTPS）";
+                    return;
+                }
+                
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    // 尝试使用旧的 API
+                    const getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+                    if (!getUserMedia) {
+                        document.getElementById('status-text').innerText = "您的浏览器不支持摄像头功能";
+                        return;
+                    }
+                }
+                
+                // PC端自动启动，移动端显示按钮（需要用户交互）
+                if (isMobile) {
+                    document.getElementById('start-camera-btn').style.display = 'block';
+                    document.getElementById('status-text').innerText = "点击按钮启动摄像头";
+                } else {
+                    // PC端自动启动摄像头
+                    startCamera();
+                }
+            } catch (error) {
+                console.error('MediaPipe 初始化错误:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('status-text').innerText = "初始化失败: " + error.message;
+            }
+        }
+        
+        async function startCamera() {
             const video = document.getElementById("input-video");
+            const startBtn = document.getElementById('start-camera-btn');
+            const statusText = document.getElementById('status-text');
+            
+            // 如果已经在运行，先停止
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+            }
+            
+            // 隐藏按钮（如果存在）
+            if (startBtn) {
+                startBtn.style.display = 'none';
+            }
+            
+            if (statusText) {
+                statusText.innerText = "正在请求摄像头权限...";
+            }
             
             // 检查浏览器支持
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('status-text').innerText = "您的浏览器不支持摄像头功能";
-                return;
+                // 尝试使用旧的 API（兼容性处理）
+                const getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+                if (getUserMedia) {
+                    getUserMedia.call(navigator, { video: true }, 
+                        (stream) => {
+                            cameraStream = stream;
+                            video.srcObject = stream;
+                            video.addEventListener("loadeddata", () => {
+                                statusText.innerText = "系统就绪，请伸手";
+                                if (handLandmarker) {
+                                    predictWebcam(handLandmarker, video);
+                                }
+                            });
+                        },
+                        (error) => {
+                            handleCameraError(error);
+                        }
+                    );
+                    return;
+                } else {
+                    statusText.innerText = "您的浏览器不支持摄像头功能";
+                    startBtn.style.display = 'block';
+                    return;
+                }
             }
             
-            // 移动端友好的视频约束配置
-            const videoConstraints = {
-                video: {
-                    facingMode: 'user', // 使用前置摄像头
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
-                    // 移动端兼容性设置
-                    aspectRatio: { ideal: 16/9 }
-                }
-            };
-            
-            navigator.mediaDevices.getUserMedia(videoConstraints)
-                .then((stream) => {
-                    video.srcObject = stream;
-                    video.addEventListener("loadeddata", () => {
-                        document.getElementById('loading').style.display = 'none';
-                        document.getElementById('status-text').innerText = "系统就绪，请伸手";
-                        predictWebcam(handLandmarker, video);
-                    });
-                })
-                .catch((error) => {
-                    console.error('摄像头访问错误:', error);
-                    document.getElementById('loading').style.display = 'none';
-                    
-                    let errorMessage = "无法访问摄像头";
-                    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-                        errorMessage = "请允许访问摄像头权限";
-                    } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-                        errorMessage = "未找到摄像头设备";
-                    } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-                        errorMessage = "摄像头被其他应用占用";
-                    } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
-                        errorMessage = "摄像头不支持所需设置，尝试使用默认设置";
-                        // 尝试使用更简单的约束
-                        navigator.mediaDevices.getUserMedia({ video: true })
-                            .then((stream) => {
-                                video.srcObject = stream;
-                                video.addEventListener("loadeddata", () => {
-                                    document.getElementById('loading').style.display = 'none';
-                                    document.getElementById('status-text').innerText = "系统就绪，请伸手";
-                                    predictWebcam(handLandmarker, video);
-                                });
-                            })
-                            .catch((fallbackError) => {
-                                document.getElementById('status-text').innerText = "摄像头初始化失败: " + fallbackError.message;
-                            });
-                        return;
+            // 尝试多种视频约束配置（从最理想到最基础）
+            const constraintsList = [
+                {
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
                     }
-                    document.getElementById('status-text').innerText = errorMessage;
-                });
+                },
+                {
+                    video: {
+                        facingMode: 'user'
+                    }
+                },
+                {
+                    video: true
+                }
+            ];
+            
+            let lastError = null;
+            for (const constraints of constraintsList) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    cameraStream = stream;
+                    video.srcObject = stream;
+                    
+                    // 确保视频播放
+                    video.setAttribute('playsinline', 'true');
+                    video.setAttribute('webkit-playsinline', 'true');
+                    video.setAttribute('x5-playsinline', 'true');
+                    
+                    // 等待视频元数据加载
+                    const handleVideoReady = () => {
+                        statusText.innerText = "系统就绪，请伸手";
+                        if (handLandmarker) {
+                            predictWebcam(handLandmarker, video);
+                        }
+                    };
+                    
+                    // 尝试多个事件来确保视频就绪
+                    video.addEventListener("loadeddata", handleVideoReady, { once: true });
+                    video.addEventListener("loadedmetadata", handleVideoReady, { once: true });
+                    video.addEventListener("canplay", handleVideoReady, { once: true });
+                    
+                    // 确保视频播放（移动端需要）
+                    video.play().then(() => {
+                        console.log('视频播放成功');
+                    }).catch(err => {
+                        console.warn('视频自动播放失败:', err);
+                        // 如果自动播放失败，提示用户
+                        if (err.name === 'NotAllowedError') {
+                            statusText.innerText = "请点击视频区域允许播放";
+                            video.addEventListener('click', () => {
+                                video.play().then(() => {
+                                    statusText.innerText = "系统就绪，请伸手";
+                                    if (handLandmarker) {
+                                        predictWebcam(handLandmarker, video);
+                                    }
+                                });
+                            }, { once: true });
+                        }
+                    });
+                    
+                    return; // 成功启动，退出函数
+                } catch (error) {
+                    lastError = error;
+                    console.warn('尝试约束失败:', constraints, error);
+                    continue; // 尝试下一个约束
+                }
+            }
+            
+            // 所有约束都失败
+            handleCameraError(lastError);
+        }
+        
+        function handleCameraError(error) {
+            console.error('摄像头访问错误:', error);
+            const statusText = document.getElementById('status-text');
+            const startBtn = document.getElementById('start-camera-btn');
+            
+            let errorMessage = "无法访问摄像头";
+            if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                errorMessage = "请允许访问摄像头权限（在浏览器设置中允许）";
+            } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                errorMessage = "未找到摄像头设备";
+            } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+                errorMessage = "摄像头被其他应用占用，请关闭其他应用后重试";
+            } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
+                errorMessage = "摄像头不支持所需设置";
+            } else if (error.name === 'NotSupportedError') {
+                errorMessage = "当前环境不支持摄像头（需要 HTTPS）";
+            } else {
+                errorMessage = "摄像头错误: " + (error.message || error.name);
+            }
+            
+            statusText.innerText = errorMessage;
+            startBtn.style.display = 'block';
         }
  
         let lastVideoTime = -1;
