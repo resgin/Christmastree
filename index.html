@@ -644,7 +644,8 @@
             }
         }
         
-        async function startCamera() {
+        // 将 startCamera 暴露到全局作用域，以便 onclick 可以调用
+        window.startCamera = async function startCamera() {
             const video = document.getElementById("input-video");
             const startBtn = document.getElementById('start-camera-btn');
             const statusText = document.getElementById('status-text');
