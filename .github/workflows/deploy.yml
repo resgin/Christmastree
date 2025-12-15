@@ -47,6 +47,11 @@ jobs:
           grep -E "(script|link)" dist/index.html | head -10 || echo "No script/link tags found!"
           echo "Build verification complete"
 
+      - name: Create .nojekyll file
+        run: |
+          touch dist/.nojekyll
+          echo "Created .nojekyll file to disable Jekyll processing"
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
